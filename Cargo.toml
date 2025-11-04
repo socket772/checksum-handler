@@ -4,3 +4,11 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
+walkdir = "2.5.0"
+xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
