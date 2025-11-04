@@ -43,13 +43,7 @@ fn main() {
         println!("{{--create|--check}} PATH")
     }
 
-    let mut folder = args.get(2).unwrap().trim();
-
-    if folder != "./" {
-        folder = folder.trim_end_matches("/");
-    }
-
-    println!("Cartella selezionata: {}", folder);
+    let folder = args.get(2).unwrap().trim().trim_end_matches("/");
 
     let operation = args.get(1).unwrap();
 
@@ -68,39 +62,19 @@ fn create_checksum(folder: &str) {
     //
     // Leggi dal file e carica in hasmap_disk
     //
-    let mut hashmap_disk: HashMap<String, FileMetadata> = HashMap::new();
-    // let timenow = Instant::now();
-    let reader = read_lines(folder).unwrap();
-    for line in reader {
-        if line.is_err() {
-        } else {
-            let line_decoded: Vec<String> =
-                line.unwrap().split(">").map(|x| x.to_string()).collect();
-            // println!("{:#?}", line_decoded);
-            let result_hashmap_insert = hashmap_disk.insert(
-                line_decoded[0].clone(),
-                FileMetadata {
-                    hash: line_decoded[1].clone(),
-                    file_created: line_decoded[2].clone(),
-                    file_modified: line_decoded[3].clone(),
-                },
-            );
-            if result_hashmap_insert.is_some() {
-                // println!("{}", result_hashmap_insert.unwrap())
-            }
-        }
-    }
+    let mut hashmap_disk: HashMap<String, FileMetadata> = create_hashmap_from_file(folder);
 
-    // println!("Hashmap insert: {:?}", timenow.elapsed());
+    //
+    // Variabili per le statistiche finali
+    //
+    let mut updated: u32 = 0;
+    let mut inserted: u32 = 0;
+    let mut skipped: u32 = 0;
 
     //
     // Ricerca tutti i file e aggiungili confrontali con quelli del file
     // Se non esistono, aggiungili. Se esistono aggiornali
     //
-
-    let mut updated: u32 = 0;
-    let mut inserted: u32 = 0;
-    let mut skipped: u32 = 0;
 
     for file in WalkDir::new(&folder).into_iter().filter_map(|e| e.ok()) {
         if file.path().is_dir()
@@ -146,11 +120,9 @@ fn create_checksum(folder: &str) {
         .create(true)
         .open(format!("{folder}/checksum.xxh3"))
         .unwrap();
-    let timenow = Instant::now();
     file_checksum
         .write(hashmap_to_string(hashmap_disk).as_bytes())
         .unwrap();
-    println!("Hashmap scrivi in file: {:?}", timenow.elapsed());
     println!("Stats: U{updated}, I{inserted}, S{skipped}");
 }
 
@@ -195,7 +167,7 @@ fn read_lines(folder: &str) -> io::Result<io::Lines<io::BufReader<File>>> {
         let temp_file_create = File::create(format!("{folder}/checksum.xxh3"));
         drop(temp_file_create)
     }
-    let file = File::open(format!("{}/checksum.xxh3", folder)).unwrap();
+    let file = File::open(format!("{folder}/checksum.xxh3")).unwrap();
     Ok(io::BufReader::new(file).lines())
 }
 
@@ -213,4 +185,34 @@ fn hashmap_to_string(hashmap: HashMap<String, FileMetadata>) -> String {
         stringa_finale.push_str(format!("{}>{}\n", entry.0, entry.1).as_str());
     }
     return stringa_finale;
+}
+
+fn create_hashmap_from_file(folder: &str) -> HashMap<String, FileMetadata> {
+    //
+    // Leggi dal file e carica in hasmap_disk
+    //
+    let mut hashmap: HashMap<String, FileMetadata> = HashMap::new();
+    // let timenow = Instant::now();
+    let reader = read_lines(folder).unwrap();
+    for line in reader {
+        if line.is_err() {
+        } else {
+            let line_decoded: Vec<String> =
+                line.unwrap().split(">").map(|x| x.to_string()).collect();
+            // println!("{:#?}", line_decoded);
+            let result_hashmap_insert = hashmap.insert(
+                line_decoded[0].clone(),
+                FileMetadata {
+                    hash: line_decoded[1].clone(),
+                    file_created: line_decoded[2].clone(),
+                    file_modified: line_decoded[3].clone(),
+                },
+            );
+            if result_hashmap_insert.is_some() {
+                // println!("{}", result_hashmap_insert.unwrap())
+            }
+        }
+    }
+
+    return hashmap;
 }
