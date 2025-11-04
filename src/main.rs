@@ -127,7 +127,20 @@ fn create_checksum(folder: &str) {
 }
 
 fn check_checksum(folder: &str) {
-    todo!("programma il controllo del checksum");
+    let hashmap_disk = create_hashmap_from_file(folder);
+
+    for file in hashmap_disk {
+        let file_data = fs::read(&file.0);
+        if file_data.is_err() {
+            println!("READ ERROR: {}", file.0);
+            continue;
+        }
+        if format!("{:X}", xxh3_128(&file_data.unwrap())) == file.1.hash {
+            // println!("OK: {}", &file.0)
+        } else {
+            println!("FAIL: {}", &file.0)
+        }
+    }
 }
 
 fn get_modified_time_from_file(file: &walkdir::DirEntry) -> String {
@@ -162,7 +175,7 @@ fn is_file_readonly(file: &walkdir::DirEntry) -> bool {
     return file.metadata().unwrap().permissions().readonly();
 }
 
-fn read_lines(folder: &str) -> io::Result<io::Lines<io::BufReader<File>>> {
+fn read_checksum_file(folder: &str) -> io::Result<io::Lines<io::BufReader<File>>> {
     if !Path::new(&format!("{folder}/checksum.xxh3")).exists() {
         let temp_file_create = File::create(format!("{folder}/checksum.xxh3"));
         drop(temp_file_create)
@@ -193,7 +206,7 @@ fn create_hashmap_from_file(folder: &str) -> HashMap<String, FileMetadata> {
     //
     let mut hashmap: HashMap<String, FileMetadata> = HashMap::new();
     // let timenow = Instant::now();
-    let reader = read_lines(folder).unwrap();
+    let reader = read_checksum_file(folder).unwrap();
     for line in reader {
         if line.is_err() {
         } else {
