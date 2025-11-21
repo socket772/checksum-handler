@@ -68,8 +68,9 @@ fn create_checksum(folder: &str) {
     // Variabili per le statistiche finali
     //
     let mut updated: u32 = 0;
-    let mut inserted: u32 = 0;
+    let mut added: u32 = 0;
     let mut skipped: u32 = 0;
+    let mut ignored: u32 = 0;
 
     //
     // Ricerca tutti i file e aggiungili confrontali con quelli del file
@@ -78,9 +79,11 @@ fn create_checksum(folder: &str) {
 
     for file in WalkDir::new(&folder).into_iter().filter_map(|e| e.ok()) {
         if file.path().is_dir()
-            || file.path().ends_with("checksum-handler")
-            || file.path().ends_with("checksum.xxh3")
+            || file.path().starts_with("./checksum-handler")
+            || file.path().starts_with("./checksum.xxh3")
+            || file.path().starts_with("./.venv/")
         {
+            ignored = ignored + 1;
             continue;
         }
 
@@ -94,20 +97,35 @@ fn create_checksum(folder: &str) {
                     && file_metadata.file_modified == get_modified_time_from_file(&file))
             {
                 skipped = skipped + 1;
-                // println!("Skip ({}): {:?}", file_path_string, _timenow.elapsed());
+                // Cyan
+                println!(
+                    "\x1b[0;36mSKIP\x1b[0m ({}): {:?}",
+                    file_path_string,
+                    _timenow.elapsed()
+                );
             } else {
                 updated = updated + 1;
                 let file_metadata = genereate_file_metadata(&file);
                 hashmap_disk
                     .entry(file_path_string.to_owned())
                     .or_insert(file_metadata);
-                // println!("Update ({}): {:?}", file_path_string, _timenow.elapsed());
+                // Purple
+                println!(
+                    "\x1b[0;35mUPDATE\x1b[0m ({}): {:?}",
+                    file_path_string,
+                    _timenow.elapsed()
+                );
             }
         } else {
-            inserted = inserted + 1;
+            added = added + 1;
             let file_metadata = genereate_file_metadata(&file);
             hashmap_disk.insert(file_path_string.to_owned(), file_metadata.clone());
-            // println!("Insert: ({:?}): {}", file_path_string, _timenow.elapsed());
+            // Green
+            println!(
+                "\x1b[0;32mINSERT\x1b[0m: ({}): {:?}",
+                file_path_string,
+                _timenow.elapsed()
+            );
         }
     }
 
@@ -123,7 +141,7 @@ fn create_checksum(folder: &str) {
     file_checksum
         .write(hashmap_to_string(hashmap_disk).as_bytes())
         .unwrap();
-    println!("Stats: U{updated}, I{inserted}, S{skipped}");
+    println!("Stats: U{updated}, A{added}, S{skipped}, I{ignored}");
 }
 
 fn check_checksum(folder: &str) {
@@ -132,13 +150,13 @@ fn check_checksum(folder: &str) {
     for file in hashmap_disk {
         let file_data = fs::read(&file.0);
         if file_data.is_err() {
-            println!("READ ERROR: {}", file.0);
+            println!("\x1b[1;31mREAD ERROR: {}\x1b[0m", file.0);
             continue;
         }
         if format!("{:X}", xxh3_128(&file_data.unwrap())) == file.1.hash {
-            // println!("OK: {}", &file.0)
+            println!("\x1b[0;32mOK\x1b[0m: {}", &file.0)
         } else {
-            println!("FAIL: {}", &file.0)
+            println!("\x1b[0;33mFAIL\x1b[0m: {}", &file.0)
         }
     }
 }
