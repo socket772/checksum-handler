@@ -27,6 +27,29 @@ impl fmt::Display for FileMetadata {
     }
 }
 
+// Enum per i colori e stili dell'output
+enum Color {
+    Black,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Purple,
+    Cyan,
+    White,
+}
+
+enum Style {
+    Regular,
+    Bold,
+    Underline,
+}
+
+enum Intensity {
+    Low,
+    High,
+}
+
 //
 // NOTE, il file deve esistere nella cartella dove viene eseguito il programma
 //
@@ -70,24 +93,31 @@ fn create_checksum(folder: &str) {
     let mut updated: u32 = 0;
     let mut added: u32 = 0;
     let mut skipped: u32 = 0;
-    let mut ignored: u32 = 0;
+
+    let folder_content = WalkDir::new(&folder)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| !e.path().is_dir())
+        .filter(|e| !e.path().starts_with("./checksum-handler"))
+        .filter(|e| !e.path().starts_with("./checksum.xxh3"));
+
+    let file_totali: usize = WalkDir::new(&folder)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| !e.path().is_dir())
+        .filter(|e| !e.path().starts_with("./checksum-handler"))
+        .filter(|e| !e.path().starts_with("./checksum.xxh3"))
+        .count();
 
     //
     // Ricerca tutti i file e aggiungili confrontali con quelli del file
     // Se non esistono, aggiungili. Se esistono aggiornali
     //
 
-    for file in WalkDir::new(&folder).into_iter().filter_map(|e| e.ok()) {
-        if file.path().is_dir()
-            || file.path().starts_with("./checksum-handler")
-            || file.path().starts_with("./checksum.xxh3")
-            || file.path().starts_with("./.venv/")
-        {
-            ignored = ignored + 1;
-            continue;
-        }
+    // let fodler_contents = ;
 
-        let _timenow = Instant::now();
+    for file in folder_content {
+        let timenow = Instant::now();
         let file_path_string = file.path().to_str().unwrap();
 
         if hashmap_disk.contains_key(file_path_string) {
@@ -99,9 +129,12 @@ fn create_checksum(folder: &str) {
                 skipped = skipped + 1;
                 // Cyan
                 println!(
-                    "\x1b[0;36mSKIP\x1b[0m ({}): {:?}",
+                    "{} -> {} -> ({}/{}) -> {:?}",
+                    colored_string("SKIP", Color::Cyan, Style::Regular, Intensity::Low),
                     file_path_string,
-                    _timenow.elapsed()
+                    updated + added + skipped,
+                    file_totali,
+                    timenow.elapsed()
                 );
             } else {
                 updated = updated + 1;
@@ -111,9 +144,12 @@ fn create_checksum(folder: &str) {
                     .or_insert(file_metadata);
                 // Purple
                 println!(
-                    "\x1b[0;35mUPDATE\x1b[0m ({}): {:?}",
+                    "{} -> {} -> ({}/{}) -> {:?}",
+                    colored_string("UPDATE", Color::Yellow, Style::Regular, Intensity::Low),
                     file_path_string,
-                    _timenow.elapsed()
+                    updated + added + skipped,
+                    file_totali,
+                    timenow.elapsed()
                 );
             }
         } else {
@@ -122,9 +158,12 @@ fn create_checksum(folder: &str) {
             hashmap_disk.insert(file_path_string.to_owned(), file_metadata.clone());
             // Green
             println!(
-                "\x1b[0;32mINSERT\x1b[0m: ({}): {:?}",
+                "{} -> {} -> ({}/{}) -> {:?}",
+                colored_string("INSERT", Color::Green, Style::Regular, Intensity::Low),
                 file_path_string,
-                _timenow.elapsed()
+                updated + added + skipped,
+                file_totali,
+                timenow.elapsed()
             );
         }
     }
@@ -141,23 +180,50 @@ fn create_checksum(folder: &str) {
     file_checksum
         .write(hashmap_to_string(hashmap_disk).as_bytes())
         .unwrap();
-    println!("Stats: U{updated}, A{added}, S{skipped}, I{ignored}");
+    println!("Stats: U{updated}, A{added}, S{skipped}");
 }
 
 fn check_checksum(folder: &str) {
+    println!("Inizio a calcolare il checksum dei file");
     let hashmap_disk = create_hashmap_from_file(folder);
+    let file_totali: usize = hashmap_disk.len();
+    let mut file_verificati: u32 = 0;
 
     for file in hashmap_disk {
         let file_data = fs::read(&file.0);
         if file_data.is_err() {
-            println!("\x1b[1;31mREAD ERROR: {}\x1b[0m", file.0);
+            println!(
+                "{}",
+                colored_string(
+                    format!("READ ERROR (?FILE NOT EXISTS?) -> '{}'", file.0).as_str(),
+                    Color::Red,
+                    Style::Bold,
+                    Intensity::High
+                )
+            );
             continue;
         }
+        let timenow = Instant::now();
         if format!("{:X}", xxh3_128(&file_data.unwrap())) == file.1.hash {
-            println!("\x1b[0;32mOK\x1b[0m: {}", &file.0)
+            println!(
+                "{} -> {} -> ({}/{}) -> {:?}",
+                colored_string("OK", Color::Green, Style::Regular, Intensity::Low),
+                &file.0,
+                file_verificati,
+                file_totali,
+                timenow.elapsed()
+            )
         } else {
-            println!("\x1b[0;33mFAIL\x1b[0m: {}", &file.0)
+            println!(
+                "{} -> {} -> ({}/{}) -> {:?}",
+                colored_string("FAIL", Color::Red, Style::Regular, Intensity::Low),
+                &file.0,
+                file_verificati,
+                file_totali,
+                timenow.elapsed()
+            )
         }
+        file_verificati = file_verificati + 1;
     }
 }
 
@@ -230,8 +296,17 @@ fn create_hashmap_from_file(folder: &str) -> HashMap<String, FileMetadata> {
         } else {
             let line_decoded: Vec<String> =
                 line.unwrap().split(">").map(|x| x.to_string()).collect();
-            // println!("{:#?}", line_decoded);
-            let result_hashmap_insert = hashmap.insert(
+            println!(
+                "{} -> {}",
+                colored_string(
+                    "DECODED FROM FILE",
+                    Color::Purple,
+                    Style::Regular,
+                    Intensity::Low
+                ),
+                line_decoded[0]
+            );
+            let _ = hashmap.insert(
                 line_decoded[0].clone(),
                 FileMetadata {
                     hash: line_decoded[1].clone(),
@@ -239,11 +314,40 @@ fn create_hashmap_from_file(folder: &str) -> HashMap<String, FileMetadata> {
                     file_modified: line_decoded[3].clone(),
                 },
             );
-            if result_hashmap_insert.is_some() {
-                // println!("{}", result_hashmap_insert.unwrap())
-            }
         }
     }
 
     return hashmap;
+}
+
+fn colored_string(line: &str, color: Color, style: Style, intensity: Intensity) -> String {
+    let mut color_number: u8;
+    let style_number: u8;
+    let intensity_offset: u8 = 60;
+    let escape_character: String = String::from("\x1b");
+    let reset: String = format!("{escape_character}[0m");
+
+    match color {
+        Color::Black => color_number = 30,
+        Color::Red => color_number = 31,
+        Color::Green => color_number = 32,
+        Color::Yellow => color_number = 33,
+        Color::Blue => color_number = 34,
+        Color::Purple => color_number = 35,
+        Color::Cyan => color_number = 36,
+        Color::White => color_number = 37,
+    }
+
+    match style {
+        Style::Regular => style_number = 0,
+        Style::Bold => style_number = 1,
+        Style::Underline => style_number = 4,
+    }
+
+    match intensity {
+        Intensity::Low => color_number = color_number + 0,
+        Intensity::High => color_number = color_number + intensity_offset,
+    }
+
+    return format!("{escape_character}[{style_number};{color_number}m{line}{reset}");
 }
