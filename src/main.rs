@@ -91,8 +91,10 @@ fn create_checksum(folder: &str) {
     // Variabili per le statistiche finali
     //
     let mut updated: u32 = 0;
-    let mut added: u32 = 0;
+    let mut inserted: u32 = 0;
     let mut skipped: u32 = 0;
+    let mut inserted_vec: Vec<String> = Vec::new();
+    let mut updated_vec: Vec<String> = Vec::new();
 
     let folder_content = WalkDir::new(&folder)
         .into_iter()
@@ -132,7 +134,7 @@ fn create_checksum(folder: &str) {
                     "{} -> {} -> ({}/{}) -> {:?}",
                     colored_string("SKIP", Color::Cyan, Style::Regular, Intensity::Low),
                     file_path_string,
-                    updated + added + skipped,
+                    updated + inserted + skipped,
                     file_totali,
                     timenow.elapsed()
                 );
@@ -147,13 +149,14 @@ fn create_checksum(folder: &str) {
                     "{} -> {} -> ({}/{}) -> {:?}",
                     colored_string("UPDATE", Color::Yellow, Style::Regular, Intensity::Low),
                     file_path_string,
-                    updated + added + skipped,
+                    updated + inserted + skipped,
                     file_totali,
                     timenow.elapsed()
                 );
+                updated_vec.push(file.path().to_str().unwrap().to_string());
             }
         } else {
-            added = added + 1;
+            inserted = inserted + 1;
             let file_metadata = genereate_file_metadata(&file);
             hashmap_disk.insert(file_path_string.to_owned(), file_metadata.clone());
             // Green
@@ -161,10 +164,11 @@ fn create_checksum(folder: &str) {
                 "{} -> {} -> ({}/{}) -> {:?}",
                 colored_string("INSERT", Color::Green, Style::Regular, Intensity::Low),
                 file_path_string,
-                updated + added + skipped,
+                updated + inserted + skipped,
                 file_totali,
                 timenow.elapsed()
             );
+            inserted_vec.push(file.path().to_str().unwrap().to_string());
         }
     }
 
@@ -180,10 +184,25 @@ fn create_checksum(folder: &str) {
     file_checksum
         .write(hashmap_to_string(hashmap_disk).as_bytes())
         .unwrap();
-    println!("Stats: U{updated}, A{added}, S{skipped}");
+    println!("Stats: U-{updated}, I-{inserted}, S-{skipped}");
+
+    println!("Lista inserted:");
+    println!("{:#?}", inserted_vec);
+
+    println!("Lista updated:");
+    println!("{:#?}", updated_vec);
 }
 
 fn check_checksum(folder: &str) {
+    //
+    // Variabili per le statistiche finali
+    //
+    let mut verify_ok: u32 = 0;
+    let mut verify_fail: u32 = 0;
+    let mut verify_err: u32 = 0;
+    let mut fail_vec: Vec<String> = Vec::new();
+    let mut err_vec: Vec<String> = Vec::new();
+
     println!("Inizio a calcolare il checksum dei file");
     let hashmap_disk = create_hashmap_from_file(folder);
     let file_totali: usize = hashmap_disk.len();
@@ -201,6 +220,8 @@ fn check_checksum(folder: &str) {
                     Intensity::High
                 )
             );
+            err_vec.push(file.0);
+            verify_err = verify_err + 1;
             continue;
         }
         let timenow = Instant::now();
@@ -212,7 +233,8 @@ fn check_checksum(folder: &str) {
                 file_verificati,
                 file_totali,
                 timenow.elapsed()
-            )
+            );
+            verify_ok = verify_ok + 1;
         } else {
             println!(
                 "{} -> {} -> ({}/{}) -> {:?}",
@@ -221,10 +243,20 @@ fn check_checksum(folder: &str) {
                 file_verificati,
                 file_totali,
                 timenow.elapsed()
-            )
+            );
+            fail_vec.push(file.0);
+            verify_fail = verify_fail + 1;
         }
         file_verificati = file_verificati + 1;
     }
+
+    println!("Stats: O-{verify_ok}, F-{verify_fail}, E-{verify_err}");
+
+    println!("Lista file in fail");
+    println!("{:#?}", fail_vec);
+
+    println!("Lista file in errore");
+    println!("{:#?}", err_vec);
 }
 
 fn get_modified_time_from_file(file: &walkdir::DirEntry) -> String {
