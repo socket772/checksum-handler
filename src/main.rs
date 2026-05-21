@@ -2,13 +2,13 @@ use std::{
     collections::HashMap,
     env::{self},
     fmt::{self},
-    fs::{self, File, OpenOptions},
-    io::{self, BufRead, Write},
+    fs::{File, OpenOptions},
+    io::{self, BufRead, BufReader, Read, Write},
     path::Path,
     time::{Instant, UNIX_EPOCH},
 };
 use walkdir::WalkDir;
-use xxhash_rust::xxh3::xxh3_128;
+use xxhash_rust::xxh3::{self, Xxh3};
 
 #[derive(Clone)]
 struct FileMetadata {
@@ -209,8 +209,10 @@ fn check_checksum(folder: &str) {
     let mut file_verificati: u32 = 0;
 
     for file in hashmap_disk {
-        let file_data = fs::read(&file.0);
-        if file_data.is_err() {
+        let timenow = Instant::now();
+        let checksum = genereate_file_checksum(&file.0);
+        let time_spent = timenow.elapsed();
+        if checksum.is_err() {
             println!(
                 "{}",
                 colored_string(
@@ -224,15 +226,15 @@ fn check_checksum(folder: &str) {
             verify_err = verify_err + 1;
             continue;
         }
-        let timenow = Instant::now();
-        if format!("{:X}", xxh3_128(&file_data.unwrap())) == file.1.hash {
+
+        if checksum.unwrap() == file.1.hash {
             println!(
                 "{} -> {} -> ({}/{}) -> {:?}",
                 colored_string("OK", Color::Green, Style::Regular, Intensity::Low),
                 &file.0,
                 file_verificati,
                 file_totali,
-                timenow.elapsed()
+                time_spent
             );
             verify_ok = verify_ok + 1;
         } else {
@@ -242,7 +244,7 @@ fn check_checksum(folder: &str) {
                 &file.0,
                 file_verificati,
                 file_totali,
-                timenow.elapsed()
+                time_spent
             );
             fail_vec.push(file.0);
             verify_fail = verify_fail + 1;
@@ -271,6 +273,28 @@ fn get_modified_time_from_file(file: &walkdir::DirEntry) -> String {
             .unwrap()
             .as_secs()
     );
+}
+
+// Genera un checksum a partire da un file. Propaga gli errori di io::Error
+fn genereate_file_checksum(file_path: &str) -> Result<String, std::io::Error> {
+    // Prepara l'hasher
+    let mut hasher: Xxh3 = xxh3::Xxh3::new();
+    // Apri il file
+    let file = File::open(file_path)?;
+    // Creo il buffer reader
+    let mut reader: BufReader<File> = BufReader::new(file);
+    // Crea un buffer di 8MiB
+    let mut buffer: Vec<u8> = vec![0u8; 8 * 1024 * 1024];
+    // Aggiorna il checksum fino alla fine del file
+    loop {
+        let bytes: usize = reader.read(&mut buffer)?;
+        if bytes == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes]);
+    }
+
+    return Ok(format!("{:X}", hasher.digest128()));
 }
 
 fn get_created_time_from_file(file: &walkdir::DirEntry) -> String {
@@ -302,7 +326,10 @@ fn read_checksum_file(folder: &str) -> io::Result<io::Lines<io::BufReader<File>>
 
 fn genereate_file_metadata(file: &walkdir::DirEntry) -> FileMetadata {
     return FileMetadata {
-        hash: format!("{:X}", xxh3_128(&fs::read(file.path()).unwrap())),
+        hash: format!(
+            "{}",
+            genereate_file_checksum(file.path().to_str().unwrap()).unwrap()
+        ),
         file_created: get_created_time_from_file(file),
         file_modified: get_modified_time_from_file(file),
     };
