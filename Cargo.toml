@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 walkdir = "2.5.0"
 xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
+rusqlite = { version = "0.40.0", features = ["bundled"] }
 
 [profile.release]
 lto = "fat"

@@ -1,9 +1,10 @@
+use rusqlite::{Connection, MappedRows, params};
 use std::{
     collections::HashMap,
     env::{self},
     fmt::{self},
-    fs::{File, OpenOptions},
-    io::{self, BufRead, BufReader, Read, Write},
+    fs::File,
+    io::{self, BufRead, BufReader, Read},
     path::Path,
     time::{Instant, UNIX_EPOCH},
 };
@@ -12,9 +13,27 @@ use xxhash_rust::xxh3::{self, Xxh3};
 
 #[derive(Clone)]
 struct FileMetadata {
-    hash: String,          // Risultato
-    file_created: String,  // Per accellerare
-    file_modified: String, // Per accellerare
+    hash: String, // Risultato
+
+    file_created: i64,  // Per accellerare
+    file_modified: i64, // Per accellerare
+}
+
+struct FileData {
+    filepath: String,
+    hash: String,
+    creation_time: i64,
+    modification_time: i64,
+    size: i64,
+}
+
+impl PartialEq for FileData {
+    fn eq(&self, other: &Self) -> bool {
+        self.filepath == other.filepath
+            && self.creation_time == other.creation_time
+            && self.modification_time == other.modification_time
+            && self.size == other.size
+    }
 }
 
 impl fmt::Display for FileMetadata {
@@ -54,226 +73,276 @@ enum Intensity {
 // NOTE, il file deve esistere nella cartella dove viene eseguito il programma
 //
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     // Recupero gli argomenti del programma
     //
 
     let instant = Instant::now();
 
+    let conn = Connection::open("./db.sqlite3")?;
+
     let args: Vec<String> = env::args().collect();
-    if args.len() != 3 {
-        println!("{{--create|--check}} PATH")
-    }
 
-    let folder = args.get(2).unwrap().trim().trim_end_matches("/");
+    if args.get(2).is_none() {}
 
-    let operation = args.get(1).unwrap();
-
-    if operation == "--create" {
-        create_checksum(folder);
-    } else if operation == "--check" {
-        check_checksum(folder);
+    if let Some(operation) = args.get(1) {
+        if let Some(folder) = args.get(2) {
+            let folder_trimmed = folder.trim().trim_end_matches("/");
+            match operation.as_str() {
+                "create" => create_db(&conn)?,
+                "bootstrap" => {
+                    create_db(&conn)?;
+                    update_db(conn, folder_trimmed)?
+                }
+                "empty" => empty_db(conn)?,
+                "update" => update_db(conn, folder_trimmed)?,
+                "check" => check_db(conn)?,
+                _ => {
+                    return Err("ARGOMENTI ERRATI\n{{create|bootstrap|empty|update}} PATH".into());
+                }
+            }
+        } else {
+            return Err("CARTELLA MANCANTE\n{{create|bootstrap|empty|update}} PATH".into());
+        }
     } else {
-        println!("ARGOMENTI ERRATI\n{{--create|--check}} PATH");
+        return Err("MANCANTE\n{{create|bootstrap|empty|update}} PATH".into());
     }
 
     println!("Tempo totale: {:?}", instant.elapsed());
+    return Ok(());
 }
 
-fn create_checksum(folder: &str) {
-    //
-    // Leggi dal file e carica in hasmap_disk
-    //
-    let mut hashmap_disk: HashMap<String, FileMetadata> = create_hashmap_from_file(folder);
+fn create_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    // Creo la tabella se non esiste
+    conn.execute(
+        "
+        CREATE TABLE IF NOT EXISTS Files (
+            filepath TEXT PRIMARY KEY,
+            hash TEXT NOT NULL,
+            creation_time INT NOT NULL,
+            modification_time INT NOT NULL,
+            size INT NOT NULL
+        );",
+        (),
+    )?;
+    return Ok(());
+}
 
-    //
-    // Variabili per le statistiche finali
-    //
-    let mut updated: u32 = 0;
-    let mut inserted: u32 = 0;
-    let mut skipped: u32 = 0;
-    let mut inserted_vec: Vec<String> = Vec::new();
-    let mut updated_vec: Vec<String> = Vec::new();
+fn empty_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    conn.execute_batch("DELETE FROM Files; VACUUM;")?;
+    return Ok(());
+}
 
-    let folder_content = WalkDir::new(&folder)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| !e.path().is_dir())
-        .filter(|e| !e.path().starts_with("./checksum-handler"))
-        .filter(|e| !e.path().starts_with("./checksum.xxh3"));
+fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let folder_content = get_folder_content(folder);
+    let file_totali: usize = get_folder_content(folder).count();
+    let file_data_vec_db = db_table_to_vec(&conn)?;
 
-    let file_totali: usize = WalkDir::new(&folder)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| !e.path().is_dir())
-        .filter(|e| !e.path().starts_with("./checksum-handler"))
-        .filter(|e| !e.path().starts_with("./checksum.xxh3"))
-        .count();
+    // Apro la transazione, riduce l'IO
+    let transaction = conn.transaction()?;
 
-    //
-    // Ricerca tutti i file e aggiungili confrontali con quelli del file
-    // Se non esistono, aggiungili. Se esistono aggiornali
-    //
+    // Contatore di file elaborati
+    let mut conta_file: u32 = 0;
+    {
+        // Crea la prepared statement
+        let mut statement = transaction.prepare(
+            "
+            INSERT INTO Files(filepath, hash, creation_time, modification_time, size)
+            VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(filepath)
+            DO UPDATE
+            SET hash = excluded.hash,
+                creation_time = excluded.creation_time,
+                modification_time = excluded.modification_time,
+                size = excluded.size;",
+        )?;
 
-    // let fodler_contents = ;
-
-    for file in folder_content {
-        let timenow = Instant::now();
-        let file_path_string = file.path().to_str().unwrap();
-
-        if hashmap_disk.contains_key(file_path_string) {
-            let file_metadata = hashmap_disk.get(file_path_string).unwrap();
-            if is_file_readonly(&file)
-                || (file_metadata.file_created == get_created_time_from_file(&file)
-                    && file_metadata.file_modified == get_modified_time_from_file(&file))
-            {
-                skipped = skipped + 1;
-                // Cyan
+        // Scorri tutti i file trovati
+        for file in folder_content {
+            if File::open(&file.path()).is_err() {
                 println!(
-                    "{} -> {} -> ({}/{}) -> {:?}",
-                    colored_string("SKIP", Color::Cyan, Style::Regular, Intensity::Low),
-                    file_path_string,
-                    updated + inserted + skipped,
-                    file_totali,
-                    timenow.elapsed()
+                    "{} -> {:?}",
+                    colored_string(
+                        format!("ERRORE LETTURA FILE, FILE NON LEGGIBILE").as_str(),
+                        Color::Red,
+                        Style::Bold,
+                        Intensity::High
+                    ),
+                    &file.path()
                 );
-            } else {
-                updated = updated + 1;
-                let file_metadata = genereate_file_metadata(&file);
-                hashmap_disk
-                    .entry(file_path_string.to_owned())
-                    .or_insert(file_metadata);
-                // Purple
-                println!(
-                    "{} -> {} -> ({}/{}) -> {:?}",
-                    colored_string("UPDATE", Color::Yellow, Style::Regular, Intensity::Low),
-                    file_path_string,
-                    updated + inserted + skipped,
-                    file_totali,
-                    timenow.elapsed()
-                );
-                updated_vec.push(file.path().to_str().unwrap().to_string());
+                continue;
             }
-        } else {
-            inserted = inserted + 1;
-            let file_metadata = genereate_file_metadata(&file);
-            hashmap_disk.insert(file_path_string.to_owned(), file_metadata.clone());
-            // Green
-            println!(
-                "{} -> {} -> ({}/{}) -> {:?}",
-                colored_string("INSERT", Color::Green, Style::Regular, Intensity::Low),
-                file_path_string,
-                updated + inserted + skipped,
-                file_totali,
-                timenow.elapsed()
-            );
-            inserted_vec.push(file.path().to_str().unwrap().to_string());
+            let query_time = Instant::now();
+            // contiene il file e i suoi metadati reali sul disco
+
+            let file_data_real = generate_file_data_no_hash(file)?;
+
+            // contiene il file e i suoi metadati recuperati dal database
+            let file_found_in_db = file_data_vec_db
+                .binary_search_by(|f| f.filepath.as_str().cmp(file_data_real.filepath.as_str()));
+
+            match file_found_in_db {
+                // CASO FILE TORVATO
+                Ok(idx) => {
+                    let file_found: &FileData = &file_data_vec_db[idx];
+                    // salto il file se i suoi metadati non sono cambiati per accellerare il processo
+                    if file_found.creation_time == file_data_real.creation_time
+                        && file_found.modification_time == file_data_real.modification_time
+                        && file_found.size == file_data_real.size
+                    {
+                        println!(
+                            "{} -> {} -> ({}/{}) -> {:?}",
+                            colored_string("SKIP", Color::Cyan, Style::Regular, Intensity::Low),
+                            file_data_real.filepath,
+                            conta_file,
+                            file_totali,
+                            query_time.elapsed()
+                        );
+                    } else {
+                        // Aggiungo il nuovo hash del file
+                        // Eseguo la query preparata
+                        statement.execute(params![
+                            file_data_real.filepath,
+                            genereate_file_checksum(&file_data_real.filepath)?,
+                            file_data_real.creation_time,
+                            file_data_real.modification_time,
+                            file_data_real.size,
+                        ])?;
+
+                        // Stampa dati di transazione
+                        println!(
+                            "{} -> {} -> ({}/{}) -> {:?}",
+                            colored_string(
+                                "UPDATED",
+                                Color::Yellow,
+                                Style::Regular,
+                                Intensity::Low
+                            ),
+                            file_data_real.filepath,
+                            conta_file,
+                            file_totali,
+                            query_time.elapsed()
+                        );
+                    }
+                }
+                // CASO FILE NON TROVATO
+                Err(_) => {
+                    // Aggiungo il nuovo hash del file
+                    // Eseguo la query preparata
+                    statement.execute(params![
+                        file_data_real.filepath,
+                        genereate_file_checksum(&file_data_real.filepath)?,
+                        file_data_real.creation_time,
+                        file_data_real.modification_time,
+                        file_data_real.size,
+                    ])?;
+
+                    // Stampa dati di transazione
+                    println!(
+                        "{} -> {} -> ({}/{}) -> {:?}",
+                        colored_string("INSERT", Color::Green, Style::Regular, Intensity::Low),
+                        file_data_real.filepath,
+                        conta_file,
+                        file_totali,
+                        query_time.elapsed()
+                    );
+                }
+            }
+
+            // se lo trova, verifica se è cambiato
+
+            // Aumenta il contatore dei file elaborati
+            conta_file = conta_file + 1;
         }
     }
+    // Confermo la transazione
+    transaction.commit()?;
 
-    //
-    // Preparo la stringa da scrivere e scrivo sul file
-    //
-
-    let mut file_checksum = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open(format!("{folder}/checksum.xxh3"))
-        .unwrap();
-    file_checksum
-        .write(hashmap_to_string(hashmap_disk).as_bytes())
-        .unwrap();
-    println!("Stats: U-{updated}, I-{inserted}, S-{skipped}");
-
-    println!("Lista inserted:");
-    println!("{:#?}", inserted_vec);
-
-    println!("Lista updated:");
-    println!("{:#?}", updated_vec);
+    return Ok(());
 }
 
-fn check_checksum(folder: &str) {
-    //
-    // Variabili per le statistiche finali
-    //
-    let mut verify_ok: u32 = 0;
-    let mut verify_fail: u32 = 0;
-    let mut verify_err: u32 = 0;
-    let mut fail_vec: Vec<String> = Vec::new();
-    let mut err_vec: Vec<String> = Vec::new();
+fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let file_data_vec_db = db_table_to_vec(&conn)?;
 
-    println!("Inizio a calcolare il checksum dei file");
-    let hashmap_disk = create_hashmap_from_file(folder);
-    let file_totali: usize = hashmap_disk.len();
-    let mut file_verificati: u32 = 0;
+    let file_totali_db = file_data_vec_db.len();
 
-    for file in hashmap_disk {
-        let timenow = Instant::now();
-        let checksum = genereate_file_checksum(&file.0);
-        let time_spent = timenow.elapsed();
-        if checksum.is_err() {
-            println!(
-                "{}",
+    // Contatore di file elaborati
+    let mut conta_file: u32 = 0;
+
+    for file_data in file_data_vec_db {
+        match std::fs::exists(&file_data.filepath) {
+            Ok(exists) => {
+                if exists {
+                    let checksum_time = Instant::now();
+
+                    if let Ok(checksum_on_disk) = genereate_file_checksum(&file_data.filepath) {
+                        if file_data.hash == checksum_on_disk {
+                            println!(
+                                "{} -> {} -> ({}/{}) -> {:?}",
+                                colored_string("OK", Color::Green, Style::Regular, Intensity::Low),
+                                &file_data.filepath,
+                                conta_file,
+                                file_totali_db,
+                                checksum_time.elapsed()
+                            );
+                        } else {
+                            println!(
+                                "{} -> {} -> ({}/{}) -> {:?}",
+                                colored_string(
+                                    "DIFFERENT",
+                                    Color::Yellow,
+                                    Style::Regular,
+                                    Intensity::Low
+                                ),
+                                &file_data.filepath,
+                                conta_file,
+                                file_totali_db,
+                                checksum_time.elapsed()
+                            );
+                        }
+                    } else {
+                        println!(
+                            "{} -> {}",
+                            colored_string(
+                                format!("ERRORE LETTURA FILE, FILE NON LEGGIBILE").as_str(),
+                                Color::Red,
+                                Style::Bold,
+                                Intensity::High
+                            ),
+                            &file_data.filepath
+                        );
+                    }
+                } else {
+                    println!(
+                        "{} -> {}",
+                        colored_string(
+                            format!("NOT EXISTS").as_str(),
+                            Color::Red,
+                            Style::Regular,
+                            Intensity::Low
+                        ),
+                        &file_data.filepath
+                    );
+                }
+            }
+            Err(_) => println!(
+                "{} -> {}",
                 colored_string(
-                    format!("READ ERROR (?FILE NOT EXISTS?) -> '{}'", file.0).as_str(),
+                    format!("ERRORE RICERCA FILE").as_str(),
                     Color::Red,
                     Style::Bold,
                     Intensity::High
-                )
-            );
-            err_vec.push(file.0);
-            verify_err = verify_err + 1;
-            continue;
+                ),
+                &file_data.filepath
+            ),
         }
-
-        if checksum.unwrap() == file.1.hash {
-            println!(
-                "{} -> {} -> ({}/{}) -> {:?}",
-                colored_string("OK", Color::Green, Style::Regular, Intensity::Low),
-                &file.0,
-                file_verificati,
-                file_totali,
-                time_spent
-            );
-            verify_ok = verify_ok + 1;
-        } else {
-            println!(
-                "{} -> {} -> ({}/{}) -> {:?}",
-                colored_string("FAIL", Color::Red, Style::Regular, Intensity::Low),
-                &file.0,
-                file_verificati,
-                file_totali,
-                time_spent
-            );
-            fail_vec.push(file.0);
-            verify_fail = verify_fail + 1;
-        }
-        file_verificati = file_verificati + 1;
+        conta_file = conta_file + 1;
     }
 
-    println!("Stats: O-{verify_ok}, F-{verify_fail}, E-{verify_err}");
-
-    println!("Lista file in fail");
-    println!("{:#?}", fail_vec);
-
-    println!("Lista file in errore");
-    println!("{:#?}", err_vec);
+    return Ok(());
 }
 
-fn get_modified_time_from_file(file: &walkdir::DirEntry) -> String {
-    return format!(
-        "{:X}",
-        file.path()
-            .metadata()
-            .unwrap()
-            .modified()
-            .unwrap()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
-}
+fn prune_db() {}
 
 // Genera un checksum a partire da un file. Propaga gli errori di io::Error
 fn genereate_file_checksum(file_path: &str) -> Result<String, std::io::Error> {
@@ -297,86 +366,96 @@ fn genereate_file_checksum(file_path: &str) -> Result<String, std::io::Error> {
     return Ok(format!("{:X}", hasher.digest128()));
 }
 
-fn get_created_time_from_file(file: &walkdir::DirEntry) -> String {
-    return format!(
-        "{:X}",
-        file.path()
-            .metadata()
-            .unwrap()
-            .created()
-            .unwrap()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
+// fn generate_file_data(file: walkdir::DirEntry) -> Result<FileData, Box<dyn std::error::Error>> {
+//     let temp_filepath = file.path().to_str().unwrap();
+//     return Ok(FileData {
+//         filepath: temp_filepath.to_owned(),
+//         hash: genereate_file_checksum(temp_filepath)?,
+//         creation_time: get_created_time_from_file(&file),
+//         modification_time: get_modified_time_from_file(&file),
+//         size: get_files_size(temp_filepath),
+//     });
+// }
+
+fn generate_file_data_no_hash(
+    file: walkdir::DirEntry,
+) -> Result<FileData, Box<dyn std::error::Error>> {
+    let temp_filepath = file.path().to_str().unwrap();
+    return Ok(FileData {
+        filepath: temp_filepath.to_owned(),
+        hash: "".to_owned(),
+        creation_time: get_created_time_from_file(&file),
+        modification_time: get_modified_time_from_file(&file),
+        size: get_files_size(&temp_filepath),
+    });
 }
 
-fn is_file_readonly(file: &walkdir::DirEntry) -> bool {
-    return file.metadata().unwrap().permissions().readonly();
+fn get_files_size(file_path: &str) -> i64 {
+    return std::fs::metadata(file_path)
+        .unwrap()
+        .len()
+        .try_into()
+        .unwrap();
 }
 
-fn read_checksum_file(folder: &str) -> io::Result<io::Lines<io::BufReader<File>>> {
-    if !Path::new(&format!("{folder}/checksum.xxh3")).exists() {
-        let temp_file_create = File::create(format!("{folder}/checksum.xxh3"));
-        drop(temp_file_create)
-    }
-    let file = File::open(format!("{folder}/checksum.xxh3")).unwrap();
-    Ok(io::BufReader::new(file).lines())
+fn get_folder_content(folder: &str) -> impl Iterator<Item = walkdir::DirEntry> {
+    return WalkDir::new(&folder)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| !e.path().is_dir())
+        .filter(|e| !e.path().starts_with("./checksum-handler"))
+        .filter(|e| !e.path().starts_with("./checksum.xxh3"))
+        .filter(|e| !e.path().starts_with("./db.sqlite3"));
 }
 
-fn genereate_file_metadata(file: &walkdir::DirEntry) -> FileMetadata {
-    return FileMetadata {
-        hash: format!(
-            "{}",
-            genereate_file_checksum(file.path().to_str().unwrap()).unwrap()
-        ),
-        file_created: get_created_time_from_file(file),
-        file_modified: get_modified_time_from_file(file),
-    };
-}
+fn db_table_to_vec(conn: &Connection) -> Result<Vec<FileData>, Box<dyn std::error::Error>> {
+    let mut statement = conn.prepare("SELECT * FROM Files ORDER BY filepath;")?;
 
-fn hashmap_to_string(hashmap: HashMap<String, FileMetadata>) -> String {
-    let mut stringa_finale = String::new();
-    for entry in hashmap {
-        stringa_finale.push_str(format!("{}>{}\n", entry.0, entry.1).as_str());
-    }
-    return stringa_finale;
-}
+    let mapped = statement.query_map([], |row| {
+        Ok(FileData {
+            filepath: row.get(0)?,
+            hash: row.get(1)?,
+            creation_time: row.get(2)?,
+            modification_time: row.get(3)?,
+            size: row.get(4)?,
+        })
+    })?;
 
-fn create_hashmap_from_file(folder: &str) -> HashMap<String, FileMetadata> {
-    //
-    // Leggi dal file e carica in hasmap_disk
-    //
-    let mut hashmap: HashMap<String, FileMetadata> = HashMap::new();
-    // let timenow = Instant::now();
-    let reader = read_checksum_file(folder).unwrap();
-    for line in reader {
-        if line.is_err() {
-        } else {
-            let line_decoded: Vec<String> =
-                line.unwrap().split(">").map(|x| x.to_string()).collect();
-            println!(
-                "{} -> {}",
-                colored_string(
-                    "DECODED FROM FILE",
-                    Color::Purple,
-                    Style::Regular,
-                    Intensity::Low
-                ),
-                line_decoded[0]
-            );
-            let _ = hashmap.insert(
-                line_decoded[0].clone(),
-                FileMetadata {
-                    hash: line_decoded[1].clone(),
-                    file_created: line_decoded[2].clone(),
-                    file_modified: line_decoded[3].clone(),
-                },
-            );
-        }
+    let mut rows: Vec<FileData> = Vec::new();
+
+    for item in mapped {
+        rows.push(item?);
     }
 
-    return hashmap;
+    Ok(rows)
+}
+
+fn get_created_time_from_file(file: &walkdir::DirEntry) -> i64 {
+    return file
+        .path()
+        .metadata()
+        .unwrap()
+        .created()
+        .unwrap()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .try_into()
+        .unwrap();
+}
+
+fn get_modified_time_from_file(file: &walkdir::DirEntry) -> i64 {
+    return file
+        .path()
+        .metadata()
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .try_into()
+        .unwrap();
 }
 
 fn colored_string(line: &str, color: Color, style: Style, intensity: Intensity) -> String {
