@@ -8,6 +8,7 @@ use std::{
 use walkdir::WalkDir;
 use xxhash_rust::xxh3::{self, Xxh3};
 
+// Struct mappata per le colonne del database
 struct FileData {
     filepath: String,
     hash: String,
@@ -16,6 +17,7 @@ struct FileData {
     size: i64,
 }
 
+// Implementazione della comparazione tra istanze di Filedata
 impl PartialEq for FileData {
     fn eq(&self, other: &Self) -> bool {
         self.filepath == other.filepath
@@ -59,41 +61,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let instant = Instant::now();
 
+    // Apro la connesione con il database
     let conn = Connection::open("./db.sqlite3")?;
 
+    // Recupero gli argomenti del programma
     let args: Vec<String> = env::args().collect();
 
-    if args.get(2).is_none() {}
-
+    // Verifico se ci sono gli argomenti necessari per il funzionamento
     if let Some(operation) = args.get(1) {
         if let Some(folder) = args.get(2) {
             let folder_trimmed = folder.trim().trim_end_matches("/");
             match operation.as_str() {
-                "create" => create_db(&conn)?,
-                "bootstrap" => {
-                    create_db(&conn)?;
-                    update_db(conn, folder_trimmed)?
-                }
                 "empty" => empty_db(conn)?,
                 "update" => update_db(conn, folder_trimmed)?,
                 "check" => check_db(conn)?,
                 "prune" => prune_db(conn)?,
                 _ => {
-                    return Err("ARGOMENTI ERRATI\n{{create|bootstrap|empty|update}} PATH".into());
+                    return Err("ARGOMENTI ERRATI\n{{empty|update|check|prune}} PATH".into());
                 }
             }
         } else {
-            return Err("CARTELLA MANCANTE\n{{create|bootstrap|empty|update}} PATH".into());
+            return Err("CARTELLA MANCANTE\n{{empty|update|check|prune}} PATH".into());
         }
     } else {
-        return Err("MANCANTE\n{{create|bootstrap|empty|update}} PATH".into());
+        return Err("MANCANTE\n{{empty|update|check|prune}} PATH".into());
     }
 
     println!("Tempo totale: {:?}", instant.elapsed());
     return Ok(());
 }
 
-fn create_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+// Svuota il database in modo approfondito
+fn empty_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
     // Creo la tabella se non esiste
     conn.execute(
         "
@@ -106,17 +105,30 @@ fn create_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
         );",
         (),
     )?;
-    return Ok(());
-}
-
-fn empty_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
     conn.execute_batch("DELETE FROM Files; VACUUM;")?;
     return Ok(());
 }
 
+// Aggiorno le entrate nel database
 fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Creo la tabella se non esiste
+    conn.execute(
+        "
+        CREATE TABLE IF NOT EXISTS Files (
+            filepath TEXT PRIMARY KEY,
+            hash TEXT NOT NULL,
+            creation_time INT NOT NULL,
+            modification_time INT NOT NULL,
+            size INT NOT NULL
+        );",
+        (),
+    )?;
+
+    // Recupero il contenuto della cartella e il numero totale dei file
     let folder_content = get_folder_content(folder);
     let file_totali: usize = get_folder_content(folder).count();
+
+    // Recupero le righe del database e le metto in nu vettore
     let file_data_vec_db = db_table_to_vec(&conn)?;
 
     // Apro la transazione, riduce l'IO
@@ -139,6 +151,7 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
 
         // Scorri tutti i file trovati
         for file in folder_content {
+            // Verifico se il file può essere aperto
             if File::open(&file.path()).is_err() {
                 println!(
                     "{} -> {:?}",
@@ -152,15 +165,17 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
                 );
                 continue;
             }
-            let query_time = Instant::now();
-            // contiene il file e i suoi metadati reali sul disco
 
+            let query_time = Instant::now();
+
+            // contiene il file e i suoi metadati reali sul disco
             let file_data_real = generate_file_data_no_hash(file)?;
 
             // contiene il file e i suoi metadati recuperati dal database
             let file_found_in_db = file_data_vec_db
                 .binary_search_by(|f| f.filepath.as_str().cmp(file_data_real.filepath.as_str()));
 
+            // verifico lo stato del file trovato nel db
             match file_found_in_db {
                 // CASO FILE TORVATO
                 Ok(idx) => {
@@ -241,21 +256,38 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
     return Ok(());
 }
 
+// Verifico i checksum nel db contro i file nel disco
 fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
-    let file_data_vec_db = db_table_to_vec(&conn)?;
+    // Creo la tabella se non esiste
+    conn.execute(
+        "
+        CREATE TABLE IF NOT EXISTS Files (
+            filepath TEXT PRIMARY KEY,
+            hash TEXT NOT NULL,
+            creation_time INT NOT NULL,
+            modification_time INT NOT NULL,
+            size INT NOT NULL
+        );",
+        (),
+    )?;
 
+    // Recupero le righe del database e le metto in nu vettore
+    let file_data_vec_db = db_table_to_vec(&conn)?;
+    // prendo il numero dei file nel database
     let file_totali_db = file_data_vec_db.len();
 
     // Contatore di file elaborati
     let mut conta_file: u32 = 0;
 
     for file_data in file_data_vec_db {
+        // verifico lo stato di esistenza del file
         match std::fs::exists(&file_data.filepath) {
             Ok(exists) => {
+                // Se esiste verifico il checksum
                 if exists {
                     let checksum_time = Instant::now();
-
                     if let Ok(checksum_on_disk) = genereate_file_checksum(&file_data.filepath) {
+                        // verifico se è uguale l'hash
                         if file_data.hash == checksum_on_disk {
                             println!(
                                 "{} -> {} -> ({}/{}) -> {:?}",
@@ -323,12 +355,27 @@ fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn prune_db(mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    // Creo la tabella se non esiste
+    conn.execute(
+        "
+        CREATE TABLE IF NOT EXISTS Files (
+            filepath TEXT PRIMARY KEY,
+            hash TEXT NOT NULL,
+            creation_time INT NOT NULL,
+            modification_time INT NOT NULL,
+            size INT NOT NULL
+        );",
+        (),
+    )?;
+
+    // Recupero le righe del database e le metto in nu vettore
     let file_data_vec_db = db_table_to_vec(&conn)?;
+    // prendo il numero dei file nel database
     let file_totali_db = file_data_vec_db.len();
     let mut conta_file = 1;
 
+    // Apro la transazione
     let transaction = conn.transaction()?;
-
     {
         let mut statement = transaction.prepare(
             "
