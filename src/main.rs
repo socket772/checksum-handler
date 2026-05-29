@@ -1,23 +1,12 @@
-use rusqlite::{Connection, MappedRows, params};
+use rusqlite::{Connection, params};
 use std::{
-    collections::HashMap,
     env::{self},
-    fmt::{self},
     fs::File,
-    io::{self, BufRead, BufReader, Read},
-    path::Path,
+    io::{BufReader, Read},
     time::{Instant, UNIX_EPOCH},
 };
 use walkdir::WalkDir;
 use xxhash_rust::xxh3::{self, Xxh3};
-
-#[derive(Clone)]
-struct FileMetadata {
-    hash: String, // Risultato
-
-    file_created: i64,  // Per accellerare
-    file_modified: i64, // Per accellerare
-}
 
 struct FileData {
     filepath: String,
@@ -33,16 +22,6 @@ impl PartialEq for FileData {
             && self.creation_time == other.creation_time
             && self.modification_time == other.modification_time
             && self.size == other.size
-    }
-}
-
-impl fmt::Display for FileMetadata {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}>{}>{}",
-            self.hash, self.file_created, self.file_modified
-        )
     }
 }
 
@@ -98,6 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "empty" => empty_db(conn)?,
                 "update" => update_db(conn, folder_trimmed)?,
                 "check" => check_db(conn)?,
+                "prune" => prune_db(conn)?,
                 _ => {
                     return Err("ARGOMENTI ERRATI\n{{create|bootstrap|empty|update}} PATH".into());
                 }
@@ -342,7 +322,71 @@ fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
     return Ok(());
 }
 
-fn prune_db() {}
+fn prune_db(mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let file_data_vec_db = db_table_to_vec(&conn)?;
+    let file_totali_db = file_data_vec_db.len();
+    let mut conta_file = 1;
+
+    let transaction = conn.transaction()?;
+
+    {
+        let mut statement = transaction.prepare(
+            "
+        DELETE FROM Files
+        WHERE Files.filepath = ?1
+    ",
+        )?;
+
+        for file_data in file_data_vec_db {
+            match std::fs::exists(&file_data.filepath) {
+                Ok(exists) => {
+                    if !exists {
+                        statement.execute(params![file_data.filepath])?;
+                        println!(
+                            "{} -> {} -> ({}/{})",
+                            colored_string(
+                                "ASSENTE",
+                                Color::Yellow,
+                                Style::Regular,
+                                Intensity::Low
+                            ),
+                            &file_data.filepath,
+                            conta_file,
+                            file_totali_db,
+                        );
+                    } else {
+                        println!(
+                            "{} -> {} -> ({}/{})",
+                            colored_string(
+                                "PRESENTE",
+                                Color::Green,
+                                Style::Regular,
+                                Intensity::Low
+                            ),
+                            &file_data.filepath,
+                            conta_file,
+                            file_totali_db,
+                        );
+                    }
+                }
+                Err(_) => println!(
+                    "{} -> {}",
+                    colored_string(
+                        format!("ERRORE VERIFICA ESISTENZA FILE").as_str(),
+                        Color::Red,
+                        Style::Bold,
+                        Intensity::High
+                    ),
+                    &file_data.filepath
+                ),
+            }
+            conta_file = conta_file + 1;
+        }
+    }
+    transaction.commit()?;
+
+    return Ok(());
+}
 
 // Genera un checksum a partire da un file. Propaga gli errori di io::Error
 fn genereate_file_checksum(file_path: &str) -> Result<String, std::io::Error> {
