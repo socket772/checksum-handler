@@ -28,6 +28,7 @@ impl PartialEq for FileData {
 }
 
 // Enum per i colori e stili dell'output
+#[allow(dead_code)]
 enum Color {
     Black,
     Red,
@@ -39,12 +40,14 @@ enum Color {
     White,
 }
 
+#[allow(dead_code)]
 enum Style {
     Regular,
     Bold,
     Underline,
 }
 
+#[allow(dead_code)]
 enum Intensity {
     Low,
     High,
@@ -124,6 +127,16 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
         (),
     )?;
 
+    // Istanzio variabili per le statistiche
+    let mut updated: u32 = 0;
+    let mut inserted: u32 = 0;
+    let mut skipped: u32 = 0;
+    let mut errored: u32 = 0;
+    // vettori contenenti i percorsi dei file per le statistiche
+    let mut inserted_vec: Vec<String> = Vec::new();
+    let mut updated_vec: Vec<String> = Vec::new();
+    let mut errored_vec: Vec<String> = Vec::new();
+
     // Recupero il contenuto della cartella e il numero totale dei file
     let folder_content = get_folder_content(folder);
     let file_totali: usize = get_folder_content(folder).count();
@@ -134,8 +147,6 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
     // Apro la transazione, riduce l'IO
     let transaction = conn.transaction()?;
 
-    // Contatore di file elaborati
-    let mut conta_file: u32 = 0;
     {
         // Crea la prepared statement
         let mut statement = transaction.prepare(
@@ -153,16 +164,20 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
         for file in folder_content {
             // Verifico se il file può essere aperto
             if File::open(&file.path()).is_err() {
+                errored = errored + 1;
                 println!(
-                    "{} -> {:?}",
+                    "{} -> {:?} -> ({}/{})",
                     colored_string(
                         format!("ERRORE LETTURA FILE, FILE NON LEGGIBILE").as_str(),
                         Color::Red,
                         Style::Bold,
                         Intensity::High
                     ),
-                    &file.path()
+                    &file.path(),
+                    updated + inserted + skipped + errored,
+                    file_totali,
                 );
+                errored_vec.push(file.path().to_str().unwrap().to_string());
                 continue;
             }
 
@@ -185,15 +200,18 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
                         && file_found.modification_time == file_data_real.modification_time
                         && file_found.size == file_data_real.size
                     {
+                        skipped = skipped + 1;
+
                         println!(
                             "{} -> {} -> ({}/{}) -> {:?}",
                             colored_string("SKIP", Color::Cyan, Style::Regular, Intensity::Low),
                             file_data_real.filepath,
-                            conta_file,
+                            updated + inserted + skipped + errored,
                             file_totali,
                             query_time.elapsed()
                         );
                     } else {
+                        updated = updated + 1;
                         // Aggiungo il nuovo hash del file
                         // Eseguo la query preparata
                         statement.execute(params![
@@ -214,14 +232,17 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
                                 Intensity::Low
                             ),
                             file_data_real.filepath,
-                            conta_file,
+                            updated + inserted + skipped + errored,
                             file_totali,
                             query_time.elapsed()
                         );
+
+                        updated_vec.push(file_data_real.filepath);
                     }
                 }
                 // CASO FILE NON TROVATO
                 Err(_) => {
+                    inserted = inserted + 1;
                     // Aggiungo il nuovo hash del file
                     // Eseguo la query preparata
                     statement.execute(params![
@@ -237,27 +258,38 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
                         "{} -> {} -> ({}/{}) -> {:?}",
                         colored_string("INSERT", Color::Green, Style::Regular, Intensity::Low),
                         file_data_real.filepath,
-                        conta_file,
+                        updated + inserted + skipped + errored,
                         file_totali,
                         query_time.elapsed()
                     );
+
+                    inserted_vec.push(file_data_real.filepath);
                 }
             }
-
-            // se lo trova, verifica se è cambiato
-
-            // Aumenta il contatore dei file elaborati
-            conta_file = conta_file + 1;
         }
     }
     // Confermo la transazione
     transaction.commit()?;
+
+    println!("File inseriti({}):\n{:#?}", inserted, inserted_vec);
+    println!("File aggiornati({}):\n{:#?}", updated, updated_vec);
+    println!("File con errori({}):\n{:#?}", errored, errored_vec);
 
     return Ok(());
 }
 
 // Verifico i checksum nel db contro i file nel disco
 fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    // Istanzio variabili per le statistiche
+    let mut verified: u32 = 0;
+    let mut different: u32 = 0;
+    let mut errored: u32 = 0;
+    let mut missing: u32 = 0;
+
+    let mut different_vec: Vec<String> = Vec::new();
+    let mut missing_vec: Vec<String> = Vec::new();
+    let mut errored_vec: Vec<String> = Vec::new();
+
     // Creo la tabella se non esiste
     conn.execute(
         "
@@ -276,9 +308,6 @@ fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
     // prendo il numero dei file nel database
     let file_totali_db = file_data_vec_db.len();
 
-    // Contatore di file elaborati
-    let mut conta_file: u32 = 0;
-
     for file_data in file_data_vec_db {
         // verifico lo stato di esistenza del file
         match std::fs::exists(&file_data.filepath) {
@@ -289,15 +318,17 @@ fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(checksum_on_disk) = genereate_file_checksum(&file_data.filepath) {
                         // verifico se è uguale l'hash
                         if file_data.hash == checksum_on_disk {
+                            verified = verified + 1;
                             println!(
                                 "{} -> {} -> ({}/{}) -> {:?}",
                                 colored_string("OK", Color::Green, Style::Regular, Intensity::Low),
                                 &file_data.filepath,
-                                conta_file,
+                                verified + different + missing + errored,
                                 file_totali_db,
                                 checksum_time.elapsed()
                             );
                         } else {
+                            different = different + 1;
                             println!(
                                 "{} -> {} -> ({}/{}) -> {:?}",
                                 colored_string(
@@ -307,49 +338,67 @@ fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
                                     Intensity::Low
                                 ),
                                 &file_data.filepath,
-                                conta_file,
+                                verified + different + missing + errored,
                                 file_totali_db,
                                 checksum_time.elapsed()
                             );
+                            different_vec.push(file_data.filepath);
                         }
                     } else {
+                        errored = errored + 1;
                         println!(
-                            "{} -> {}",
+                            "{} -> {} -> ({}/{})",
                             colored_string(
                                 format!("ERRORE LETTURA FILE, FILE NON LEGGIBILE").as_str(),
                                 Color::Red,
                                 Style::Bold,
                                 Intensity::High
                             ),
-                            &file_data.filepath
+                            &file_data.filepath,
+                            verified + different + missing + errored,
+                            file_totali_db,
                         );
+                        errored_vec.push(file_data.filepath);
                     }
                 } else {
+                    missing = missing + 1;
                     println!(
-                        "{} -> {}",
+                        "{} -> {} -> ({}/{})",
                         colored_string(
                             format!("NOT EXISTS").as_str(),
                             Color::Red,
                             Style::Regular,
                             Intensity::Low
                         ),
-                        &file_data.filepath
+                        &file_data.filepath,
+                        verified + different + missing + errored,
+                        file_totali_db,
                     );
+                    missing_vec.push(file_data.filepath);
                 }
             }
-            Err(_) => println!(
-                "{} -> {}",
-                colored_string(
-                    format!("ERRORE RICERCA FILE").as_str(),
-                    Color::Red,
-                    Style::Bold,
-                    Intensity::High
-                ),
-                &file_data.filepath
-            ),
+            Err(_) => {
+                errored = errored + 1;
+
+                println!(
+                    "{} -> {} -> ({}/{})",
+                    colored_string(
+                        format!("ERRORE RICERCA FILE").as_str(),
+                        Color::Red,
+                        Style::Bold,
+                        Intensity::High
+                    ),
+                    &file_data.filepath,
+                    verified + different + missing + errored,
+                    file_totali_db,
+                );
+                errored_vec.push(file_data.filepath);
+            }
         }
-        conta_file = conta_file + 1;
     }
+
+    println!("File mancanti({}):\n{:#?}", missing, missing_vec);
+    println!("File con errori({}):\n{:#?}", errored, errored_vec);
 
     return Ok(());
 }
