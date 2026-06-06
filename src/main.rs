@@ -1,4 +1,4 @@
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::{
     env::{self},
     fs::File,
@@ -404,6 +404,13 @@ fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn prune_db(mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let mut present: u32 = 0;
+    let mut removed: u32 = 0;
+    let mut errored: u32 = 0;
+
+    let mut removed_vec: Vec<String> = Vec::new();
+    let mut errored_vec: Vec<String> = Vec::new();
+
     // Creo la tabella se non esiste
     conn.execute(
         "
@@ -421,22 +428,21 @@ fn prune_db(mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
     let file_data_vec_db = db_table_to_vec(&conn)?;
     // prendo il numero dei file nel database
     let file_totali_db = file_data_vec_db.len();
-    let mut conta_file = 1;
 
     // Apro la transazione
     let transaction = conn.transaction()?;
     {
         let mut statement = transaction.prepare(
             "
-        DELETE FROM Files
-        WHERE Files.filepath = ?1
-    ",
+        DELETE FROM Files WHERE Files.filepath = ?1
+        ",
         )?;
 
         for file_data in file_data_vec_db {
             match std::fs::exists(&file_data.filepath) {
                 Ok(exists) => {
                     if !exists {
+                        removed = removed + 1;
                         statement.execute(params![file_data.filepath])?;
                         println!(
                             "{} -> {} -> ({}/{})",
@@ -447,10 +453,12 @@ fn prune_db(mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
                                 Intensity::Low
                             ),
                             &file_data.filepath,
-                            conta_file,
-                            file_totali_db,
+                            removed + present + errored,
+                            file_totali_db
                         );
+                        removed_vec.push(file_data.filepath);
                     } else {
+                        present = present + 1;
                         println!(
                             "{} -> {} -> ({}/{})",
                             colored_string(
@@ -460,26 +468,34 @@ fn prune_db(mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
                                 Intensity::Low
                             ),
                             &file_data.filepath,
-                            conta_file,
-                            file_totali_db,
+                            removed + present + errored,
+                            file_totali_db
                         );
                     }
                 }
-                Err(_) => println!(
-                    "{} -> {}",
-                    colored_string(
-                        format!("ERRORE VERIFICA ESISTENZA FILE").as_str(),
-                        Color::Red,
-                        Style::Bold,
-                        Intensity::High
-                    ),
-                    &file_data.filepath
-                ),
+                Err(_) => {
+                    errored = errored + 1;
+                    println!(
+                        "{} -> {} -> ({}/{})",
+                        colored_string(
+                            format!("ERRORE VERIFICA ESISTENZA FILE").as_str(),
+                            Color::Red,
+                            Style::Bold,
+                            Intensity::High
+                        ),
+                        &file_data.filepath,
+                        removed + present + errored,
+                        file_totali_db
+                    );
+                    errored_vec.push(file_data.filepath);
+                }
             }
-            conta_file = conta_file + 1;
         }
     }
     transaction.commit()?;
+
+    println!("File rimosssi({}):\n{:#?}", removed, removed_vec);
+    println!("File con errori({}):\n{:#?}", errored, errored_vec);
 
     return Ok(());
 }
