@@ -1,12 +1,26 @@
+use clap::Parser;
 use rusqlite::{params, Connection};
 use std::{
-    env::{self},
     fs::File,
     io::{BufReader, Read},
     time::{Instant, UNIX_EPOCH},
 };
 use walkdir::WalkDir;
 use xxhash_rust::xxh3::{self, Xxh3};
+
+// Struct per gli argomenti del programma
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(short, long)]
+    action: String,
+
+    #[arg(short, long)]
+    folder: String,
+
+    #[arg(short, long)]
+    hash: Option<String>,
+}
 
 // Struct mappata per le colonne del database
 struct FileData {
@@ -68,26 +82,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let conn = Connection::open("./db.sqlite3")?;
 
     // Recupero gli argomenti del programma
-    let args: Vec<String> = env::args().collect();
+    let args: Args = Args::parse();
 
-    // Verifico se ci sono gli argomenti necessari per il funzionamento
-    if let Some(operation) = args.get(1) {
-        if let Some(folder) = args.get(2) {
-            let folder_trimmed = folder.trim().trim_end_matches("/");
-            match operation.as_str() {
-                "empty" => empty_db(conn)?,
-                "update" => update_db(conn, folder_trimmed)?,
-                "check" => check_db(conn)?,
-                "prune" => prune_db(conn)?,
-                _ => {
-                    return Err("ARGOMENTI ERRATI\n{{empty|update|check|prune}} PATH".into());
-                }
-            }
-        } else {
-            return Err("CARTELLA MANCANTE\n{{empty|update|check|prune}} PATH".into());
+    let folder_trimmed = args.folder.trim().trim_end_matches("/");
+
+    match args.action.as_str() {
+        "empty" => empty_db(conn)?,
+        "update" => update_db(conn, folder_trimmed)?,
+        "check" => check_db(conn)?,
+        "prune" => prune_db(conn)?,
+        _ => {
+            return Err("ARGOMENTI ERRATI\n{{empty|update|check|prune}} PATH".into());
         }
-    } else {
-        return Err("MANCANTE\n{{empty|update|check|prune}} PATH".into());
     }
 
     println!("Tempo totale: {:?}", instant.elapsed());
