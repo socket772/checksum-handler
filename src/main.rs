@@ -10,14 +10,17 @@ use xxhash_rust::xxh3::{self, Xxh3};
 
 // Struct per gli argomenti del programma
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(version, about)]
 struct Args {
+    /// <empty|update|check|prune>
     #[arg(short, long)]
     action: String,
 
+    /// Percorso della cartella dalla quale va fatto il checksum (PERICOLOSO se diverso da './')
     #[arg(short, long)]
     folder: String,
 
+    /// NON IMPLEMENTATO
     #[arg(short, long)]
     hash: Option<String>,
 }
@@ -92,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "check" => check_db(conn)?,
         "prune" => prune_db(conn)?,
         _ => {
-            return Err("ARGOMENTI ERRATI\n{{empty|update|check|prune}} PATH".into());
+            return Err("ARGOMENTI ERRATI. USA --help PER L'USO DEL PROGRAMMA".into());
         }
     }
 
