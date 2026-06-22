@@ -12,7 +12,7 @@ use xxhash_rust::xxh3::{self, Xxh3};
 #[derive(Parser, Debug)]
 #[command(version, about)]
 struct Args {
-    /// <empty|update|check|prune>
+    /// <empty|update|check|prune|quickcheck>
     #[arg(short, long)]
     action: String,
 
@@ -75,10 +75,6 @@ enum Intensity {
 //
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    //
-    // Recupero gli argomenti del programma
-    //
-
     let instant = Instant::now();
 
     // Apro la connesione con il database
@@ -93,6 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "empty" => empty_db(conn)?,
         "update" => update_db(conn, folder_trimmed)?,
         "check" => check_db(conn)?,
+        "quickcheck" => quickcheck_db(conn, folder_trimmed)?,
         "prune" => prune_db(conn)?,
         _ => {
             return Err("ARGOMENTI ERRATI. USA --help PER L'USO DEL PROGRAMMA".into());
@@ -151,7 +148,7 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
     let file_totali: usize = get_folder_content(folder).count();
 
     // Recupero le righe del database e le metto in nu vettore
-    let file_data_vec_db = db_table_to_vec(&conn)?;
+    let file_data_vec_db: Vec<FileData> = db_table_to_vec(&conn)?;
 
     // Apro la transazione, riduce l'IO
     let transaction = conn.transaction()?;
@@ -313,7 +310,7 @@ fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Recupero le righe del database e le metto in nu vettore
-    let file_data_vec_db = db_table_to_vec(&conn)?;
+    let file_data_vec_db: Vec<FileData> = db_table_to_vec(&conn)?;
     // prendo il numero dei file nel database
     let file_totali_db = file_data_vec_db.len();
 
@@ -407,6 +404,7 @@ fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("File mancanti({}):\n{:#?}", missing, missing_vec);
+    println!("File diversi({}):\n{:#?}", different, different_vec);
     println!("File con errori({}):\n{:#?}", errored, errored_vec);
 
     return Ok(());
@@ -434,7 +432,7 @@ fn prune_db(mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Recupero le righe del database e le metto in nu vettore
-    let file_data_vec_db = db_table_to_vec(&conn)?;
+    let file_data_vec_db: Vec<FileData> = db_table_to_vec(&conn)?;
     // prendo il numero dei file nel database
     let file_totali_db = file_data_vec_db.len();
 
@@ -509,6 +507,112 @@ fn prune_db(mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
     return Ok(());
 }
 
+fn quickcheck_db(conn: Connection, folder: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Istanzio variabili per le statistiche
+    let mut verified: u32 = 0;
+    let mut different: u32 = 0;
+    let mut errored: u32 = 0;
+    let mut missing: u32 = 0;
+
+    let mut different_vec: Vec<String> = Vec::new();
+    let mut missing_vec: Vec<String> = Vec::new();
+    let mut errored_vec: Vec<String> = Vec::new();
+
+    // Creo la tabella se non esiste
+    conn.execute(
+        "
+        CREATE TABLE IF NOT EXISTS Files (
+            filepath TEXT PRIMARY KEY,
+            hash TEXT NOT NULL,
+            creation_time INT NOT NULL,
+            modification_time INT NOT NULL,
+            size INT NOT NULL
+        );",
+        (),
+    )?;
+
+    // Recupero le righe del database e le metto in nu vettore
+    let file_data_vec_db: Vec<FileData> = db_table_to_vec(&conn)?;
+
+    let file_data_vec_fs: Vec<FileData> = generate_folder_data_no_hash(folder);
+    // prendo il numero dei file nel database
+    let file_totali_db: usize = file_data_vec_db.len();
+
+    for file_data in file_data_vec_db {
+        // verifico lo stato di esistenza del file
+        match std::fs::exists(&file_data.filepath) {
+            Ok(exists) => {
+                // Se esiste verifico il checksum
+                if exists {
+                    if file_data_vec_fs.contains(&file_data) {
+                        verified = verified + 1;
+                        println!(
+                            "{} -> {} -> ({}/{})",
+                            colored_string("OK", Color::Green, Style::Regular, Intensity::Low),
+                            &file_data.filepath,
+                            verified + different + missing + errored,
+                            file_totali_db
+                        );
+                    } else {
+                        different = different + 1;
+                        println!(
+                            "{} -> {} -> ({}/{})",
+                            colored_string(
+                                "DIFFERENT",
+                                Color::Yellow,
+                                Style::Regular,
+                                Intensity::Low
+                            ),
+                            &file_data.filepath,
+                            verified + different + missing + errored,
+                            file_totali_db
+                        );
+                        different_vec.push(file_data.filepath);
+                    }
+                } else {
+                    missing = missing + 1;
+                    println!(
+                        "{} -> {} -> ({}/{})",
+                        colored_string(
+                            format!("NOT EXISTS").as_str(),
+                            Color::Red,
+                            Style::Regular,
+                            Intensity::Low
+                        ),
+                        &file_data.filepath,
+                        verified + different + missing + errored,
+                        file_totali_db,
+                    );
+                    missing_vec.push(file_data.filepath);
+                }
+            }
+            Err(_) => {
+                errored = errored + 1;
+
+                println!(
+                    "{} -> {} -> ({}/{})",
+                    colored_string(
+                        format!("ERRORE RICERCA FILE").as_str(),
+                        Color::Red,
+                        Style::Bold,
+                        Intensity::High
+                    ),
+                    &file_data.filepath,
+                    verified + different + missing + errored,
+                    file_totali_db,
+                );
+                errored_vec.push(file_data.filepath);
+            }
+        }
+    }
+
+    println!("File mancanti({}):\n{:#?}", missing, missing_vec);
+    println!("File diversi({}):\n{:#?}", different, different_vec);
+    println!("File con errori({}):\n{:#?}", errored, errored_vec);
+
+    return Ok(());
+}
+
 // Genera un checksum a partire da un file. Propaga gli errori di io::Error
 fn genereate_file_checksum(file_path: &str) -> Result<String, std::io::Error> {
     // Prepara l'hasher
@@ -541,6 +645,17 @@ fn genereate_file_checksum(file_path: &str) -> Result<String, std::io::Error> {
 //         size: get_files_size(temp_filepath),
 //     });
 // }
+
+fn generate_folder_data_no_hash(folder: &str) -> Vec<FileData> {
+    let folder_content = get_folder_content(folder);
+    let mut folder_data: Vec<FileData> = Vec::new();
+
+    for file in folder_content {
+        folder_data.push(generate_file_data_no_hash(file).unwrap());
+    }
+
+    return folder_data;
+}
 
 fn generate_file_data_no_hash(
     file: walkdir::DirEntry,
