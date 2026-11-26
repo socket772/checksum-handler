@@ -208,14 +208,14 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
                     {
                         skipped = skipped + 1;
 
-                        println!(
-                            "{} -> {} -> ({}/{}) -> {:?}",
-                            colored_string("SKIP", Color::Cyan, Style::Regular, Intensity::Low),
-                            file_data_real.filepath,
-                            updated + inserted + skipped + errored,
-                            file_totali,
-                            query_time.elapsed()
-                        );
+                        // println!(
+                        //     "{} -> {} -> ({}/{}) -> {:?}",
+                        //     colored_string("SKIP", Color::Cyan, Style::Regular, Intensity::Low),
+                        //     file_data_real.filepath,
+                        //     updated + inserted + skipped + errored,
+                        //     file_totali,
+                        //     query_time.elapsed()
+                        // );
                     } else {
                         updated = updated + 1;
                         // Aggiungo il nuovo hash del file
@@ -325,14 +325,14 @@ fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
                         // verifico se è uguale l'hash
                         if file_data.hash == checksum_on_disk {
                             verified = verified + 1;
-                            println!(
-                                "{} -> {} -> ({}/{}) -> {:?}",
-                                colored_string("OK", Color::Green, Style::Regular, Intensity::Low),
-                                &file_data.filepath,
-                                verified + different + missing + errored,
-                                file_totali_db,
-                                checksum_time.elapsed()
-                            );
+                            // println!(
+                            //     "{} -> {} -> ({}/{}) -> {:?}",
+                            //     colored_string("OK", Color::Green, Style::Regular, Intensity::Low),
+                            //     &file_data.filepath,
+                            //     verified + different + missing + errored,
+                            //     file_totali_db,
+                            //     checksum_time.elapsed()
+                            // );
                         } else {
                             different = different + 1;
                             println!(
@@ -466,18 +466,18 @@ fn prune_db(mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
                         removed_vec.push(file_data.filepath);
                     } else {
                         present = present + 1;
-                        println!(
-                            "{} -> {} -> ({}/{})",
-                            colored_string(
-                                "PRESENTE",
-                                Color::Green,
-                                Style::Regular,
-                                Intensity::Low
-                            ),
-                            &file_data.filepath,
-                            removed + present + errored,
-                            file_totali_db
-                        );
+                        // println!(
+                        //     "{} -> {} -> ({}/{})",
+                        //     colored_string(
+                        //         "PRESENTE",
+                        //         Color::Green,
+                        //         Style::Regular,
+                        //         Intensity::Low
+                        //     ),
+                        //     &file_data.filepath,
+                        //     removed + present + errored,
+                        //     file_totali_db
+                        // );
                     }
                 }
                 Err(_) => {
@@ -546,13 +546,13 @@ fn quickcheck_db(conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
                 if exists {
                     if file_data_vec_fs.contains(&file_data) {
                         verified = verified + 1;
-                        println!(
-                            "{} -> {} -> ({}/{})",
-                            colored_string("OK", Color::Green, Style::Regular, Intensity::Low),
-                            &file_data.filepath,
-                            verified + different + missing + errored,
-                            file_totali_db
-                        );
+                        // println!(
+                        //     "{} -> {} -> ({}/{})",
+                        //     colored_string("OK", Color::Green, Style::Regular, Intensity::Low),
+                        //     &file_data.filepath,
+                        //     verified + different + missing + errored,
+                        //     file_totali_db
+                        // );
                     } else {
                         different = different + 1;
                         println!(
