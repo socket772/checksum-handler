@@ -168,21 +168,16 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
 
         // Scorri tutti i file trovati
         for file in folder_content {
+            // Serve per i colori di output
             // Verifico se il file può essere aperto
             if File::open(&file.path()).is_err() {
-                errored = errored + 1;
-                println!(
-                    "{} -> {:?} -> ({}/{})",
-                    colored_string(
-                        format!("ERRORE LETTURA FILE, FILE NON LEGGIBILE").as_str(),
-                        Color::Red,
-                        Style::Bold,
-                        Intensity::High
-                    ),
-                    &file.path(),
+                print!(
+                    "\r{}/{} -> {:?}",
                     updated + inserted + skipped + errored,
                     file_totali,
+                    &file.path(),
                 );
+                errored = errored + 1;
                 errored_vec.push(file.path().to_str().unwrap().to_string());
                 continue;
             }
@@ -207,15 +202,6 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
                         && file_found.size == file_data_real.size
                     {
                         skipped = skipped + 1;
-
-                        // println!(
-                        //     "{} -> {} -> ({}/{}) -> {:?}",
-                        //     colored_string("SKIP", Color::Cyan, Style::Regular, Intensity::Low),
-                        //     file_data_real.filepath,
-                        //     updated + inserted + skipped + errored,
-                        //     file_totali,
-                        //     query_time.elapsed()
-                        // );
                     } else {
                         updated = updated + 1;
                         // Aggiungo il nuovo hash del file
@@ -227,22 +213,6 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
                             file_data_real.modification_time,
                             file_data_real.size,
                         ])?;
-
-                        // Stampa dati di transazione
-                        // println!(
-                        //     "{} -> {} -> ({}/{}) -> {:?}",
-                        //     colored_string(
-                        //         "UPDATED",
-                        //         Color::Yellow,
-                        //         Style::Regular,
-                        //         Intensity::Low
-                        //     ),
-                        //     file_data_real.filepath,
-                        //     updated + inserted + skipped + errored,
-                        //     file_totali,
-                        //     query_time.elapsed()
-                        // );
-
                         updated_vec.push(file_data_real.filepath.clone());
                     }
                 }
@@ -258,17 +228,6 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
                         file_data_real.modification_time,
                         file_data_real.size,
                     ])?;
-
-                    // Stampa dati di transazione
-                    // println!(
-                    //     "{} -> {} -> ({}/{}) -> {:?}",
-                    //     colored_string("INSERT", Color::Green, Style::Regular, Intensity::Low),
-                    //     file_data_real.filepath,
-                    //     updated + inserted + skipped + errored,
-                    //     file_totali,
-                    //     query_time.elapsed()
-                    // );
-
                     inserted_vec.push(file_data_real.filepath.clone());
                 }
             }
@@ -332,79 +291,21 @@ fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
                         // verifico se è uguale l'hash
                         if file_data.hash == checksum_on_disk {
                             verified = verified + 1;
-                            // println!(
-                            //     "{} -> {} -> ({}/{}) -> {:?}",
-                            //     colored_string("OK", Color::Green, Style::Regular, Intensity::Low),
-                            //     &file_data.filepath,
-                            //     verified + different + missing + errored,
-                            //     file_totali_db,
-                            //     checksum_time.elapsed()
-                            // );
                         } else {
                             different = different + 1;
-                            // println!(
-                            //     "{} -> {} -> ({}/{}) -> {:?}",
-                            //     colored_string(
-                            //         "DIFFERENT",
-                            //         Color::Yellow,
-                            //         Style::Regular,
-                            //         Intensity::Low
-                            //     ),
-                            //     &file_data.filepath,
-                            //     verified + different + missing + errored,
-                            //     file_totali_db,
-                            //     checksum_time.elapsed()
-                            // );
                             different_vec.push(file_data.filepath.clone());
                         }
                     } else {
                         errored = errored + 1;
-                        // println!(
-                        //     "{} -> {} -> ({}/{})",
-                        //     colored_string(
-                        //         format!("ERRORE LETTURA FILE, FILE NON LEGGIBILE").as_str(),
-                        //         Color::Red,
-                        //         Style::Bold,
-                        //         Intensity::High
-                        //     ),
-                        //     &file_data.filepath,
-                        //     verified + different + missing + errored,
-                        //     file_totali_db,
-                        // );
                         errored_vec.push(file_data.filepath.clone());
                     }
                 } else {
                     missing = missing + 1;
-                    // println!(
-                    //     "{} -> {} -> ({}/{})",
-                    //     colored_string(
-                    //         format!("NOT EXISTS").as_str(),
-                    //         Color::Red,
-                    //         Style::Regular,
-                    //         Intensity::Low
-                    //     ),
-                    //     &file_data.filepath,
-                    //     verified + different + missing + errored,
-                    //     file_totali_db,
-                    // );
                     missing_vec.push(file_data.filepath.clone());
                 }
             }
             Err(_) => {
                 errored = errored + 1;
-
-                // println!(
-                //     "{} -> {} -> ({}/{})",
-                //     colored_string(
-                //         format!("ERRORE RICERCA FILE").as_str(),
-                //         Color::Red,
-                //         Style::Bold,
-                //         Intensity::High
-                //     ),
-                //     &file_data.filepath,
-                //     verified + different + missing + errored,
-                //     file_totali_db,
-                // );
                 errored_vec.push(file_data.filepath.clone());
             }
         }
@@ -466,49 +367,13 @@ fn prune_db(mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
                     if !exists {
                         removed = removed + 1;
                         statement.execute(params![file_data.filepath])?;
-                        // println!(
-                        //     "{} -> {} -> ({}/{})",
-                        //     colored_string(
-                        //         "ASSENTE",
-                        //         Color::Yellow,
-                        //         Style::Regular,
-                        //         Intensity::Low
-                        //     ),
-                        //     &file_data.filepath,
-                        //     removed + present + errored,
-                        //     file_totali_db
-                        // );
                         removed_vec.push(file_data.filepath.clone());
                     } else {
                         present = present + 1;
-                        // println!(
-                        //     "{} -> {} -> ({}/{})",
-                        //     colored_string(
-                        //         "PRESENTE",
-                        //         Color::Green,
-                        //         Style::Regular,
-                        //         Intensity::Low
-                        //     ),
-                        //     &file_data.filepath,
-                        //     removed + present + errored,
-                        //     file_totali_db
-                        // );
                     }
                 }
                 Err(_) => {
                     errored = errored + 1;
-                    // println!(
-                    //     "{} -> {} -> ({}/{})",
-                    //     colored_string(
-                    //         format!("ERRORE VERIFICA ESISTENZA FILE").as_str(),
-                    //         Color::Red,
-                    //         Style::Bold,
-                    //         Intensity::High
-                    //     ),
-                    //     &file_data.filepath,
-                    //     removed + present + errored,
-                    //     file_totali_db
-                    // );
                     errored_vec.push(file_data.filepath.clone());
                 }
             }
@@ -567,61 +432,17 @@ fn quickcheck_db(conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
                 if exists {
                     if file_data_vec_fs.contains(&file_data) {
                         verified = verified + 1;
-                        // println!(
-                        //     "{} -> {} -> ({}/{})",
-                        //     colored_string("OK", Color::Green, Style::Regular, Intensity::Low),
-                        //     &file_data.filepath,
-                        //     verified + different + missing + errored,
-                        //     file_totali_db
-                        // );
                     } else {
                         different = different + 1;
-                        // println!(
-                        //     "{} -> {} -> ({}/{})",
-                        //     colored_string(
-                        //         "DIFFERENT",
-                        //         Color::Yellow,
-                        //         Style::Regular,
-                        //         Intensity::Low
-                        //     ),
-                        //     &file_data.filepath,
-                        //     verified + different + missing + errored,
-                        //     file_totali_db
-                        // );
                         different_vec.push(file_data.filepath.clone());
                     }
                 } else {
                     missing = missing + 1;
-                    // println!(
-                    //     "{} -> {} -> ({}/{})",
-                    //     colored_string(
-                    //         format!("NOT EXISTS").as_str(),
-                    //         Color::Red,
-                    //         Style::Regular,
-                    //         Intensity::Low
-                    //     ),
-                    //     &file_data.filepath,
-                    //     verified + different + missing + errored,
-                    //     file_totali_db,
-                    // );
                     missing_vec.push(file_data.filepath.clone());
                 }
             }
             Err(_) => {
                 errored = errored + 1;
-
-                // println!(
-                //     "{} -> {} -> ({}/{})",
-                //     colored_string(
-                //         format!("ERRORE RICERCA FILE").as_str(),
-                //         Color::Red,
-                //         Style::Bold,
-                //         Intensity::High
-                //     ),
-                //     &file_data.filepath,
-                //     verified + different + missing + errored,
-                //     file_totali_db,
-                // );
                 errored_vec.push(file_data.filepath.clone());
             }
         }
@@ -661,17 +482,6 @@ fn genereate_file_checksum(file_path: &str) -> Result<String, std::io::Error> {
 
     return Ok(format!("{:X}", hasher.digest128()));
 }
-
-// fn generate_file_data(file: walkdir::DirEntry) -> Result<FileData, Box<dyn std::error::Error>> {
-//     let temp_filepath = file.path().to_str().unwrap();
-//     return Ok(FileData {
-//         filepath: temp_filepath.to_owned(),
-//         hash: genereate_file_checksum(temp_filepath)?,
-//         creation_time: get_created_time_from_file(&file),
-//         modification_time: get_modified_time_from_file(&file),
-//         size: get_files_size(temp_filepath),
-//     });
-// }
 
 fn generate_folder_data_no_hash(folder: &str) -> Vec<FileData> {
     let folder_content = get_folder_content(folder);
