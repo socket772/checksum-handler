@@ -2,7 +2,7 @@ use clap::Parser;
 use rusqlite::{params, Connection};
 use std::{
     fs::File,
-    io::{BufReader, Read},
+    io::{BufReader, Read, Write},
     time::{Instant, UNIX_EPOCH},
 };
 use walkdir::WalkDir;
@@ -172,11 +172,11 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
             // Verifico se il file può essere aperto
             if File::open(&file.path()).is_err() {
                 print!(
-                    "\r{}/{} -> {:?}",
+                    "\r\x1b[2K{}/{}",
                     updated + inserted + skipped + errored,
-                    file_totali,
-                    &file.path(),
+                    file_totali
                 );
+                std::io::stdout().flush()?;
                 errored = errored + 1;
                 errored_vec.push(file.path().to_str().unwrap().to_string());
                 continue;
@@ -232,20 +232,20 @@ fn update_db(mut conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
                 }
             }
             print!(
-                "\r{}/{} -> {} -> {:?}",
+                "\r\x1b[2K{}/{} -> {:?}",
                 updated + inserted + skipped + errored,
                 file_totali,
-                file_data_real.filepath,
                 query_time.elapsed()
             );
+            std::io::stdout().flush()?;
         }
     }
     // Confermo la transazione
     transaction.commit()?;
 
-    println!("File inseriti({}):\n{:#?}", inserted, inserted_vec);
-    println!("File aggiornati({}):\n{:#?}", updated, updated_vec);
-    println!("File con errori({}):\n{:#?}", errored, errored_vec);
+    println!("\nFile inseriti({}):\n{:#?}", inserted, inserted_vec);
+    println!("\nFile aggiornati({}):\n{:#?}", updated, updated_vec);
+    println!("\nFile con errori({}):\n{:#?}", errored, errored_vec);
 
     return Ok(());
 }
@@ -311,17 +311,17 @@ fn check_db(conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         print!(
-            "\r{}/{} -> {} -> {:?}",
+            "\r\x1b[2K{}/{} -> {:?}",
             verified + different + missing + errored,
             file_totali_db,
-            file_data.filepath,
             checksum_time.elapsed()
         );
+        std::io::stdout().flush()?;
     }
 
-    println!("File mancanti({}):\n{:#?}", missing, missing_vec);
-    println!("File diversi({}):\n{:#?}", different, different_vec);
-    println!("File con errori({}):\n{:#?}", errored, errored_vec);
+    println!("\nFile mancanti({}):\n{:#?}", missing, missing_vec);
+    println!("\nFile diversi({}):\n{:#?}", different, different_vec);
+    println!("\nFile con errori({}):\n{:#?}", errored, errored_vec);
 
     return Ok(());
 }
@@ -378,17 +378,18 @@ fn prune_db(mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             print!(
-                "\r{}/{} -> {}",
+                "\r\x1b[2K{}/{} -> {}",
                 removed + present + errored,
                 file_totali_db,
                 file_data.filepath
             );
+            std::io::stdout().flush()?;
         }
     }
     transaction.commit()?;
 
-    println!("File rimosssi({}):\n{:#?}", removed, removed_vec);
-    println!("File con errori({}):\n{:#?}", errored, errored_vec);
+    println!("\nFile rimosssi({}):\n{:#?}", removed, removed_vec);
+    println!("\nFile con errori({}):\n{:#?}", errored, errored_vec);
 
     return Ok(());
 }
@@ -447,16 +448,16 @@ fn quickcheck_db(conn: Connection, folder: &str) -> Result<(), Box<dyn std::erro
             }
         }
         print!(
-            "\r{}/{} -> {}",
+            "\r\x1b[2K{}/{}",
             verified + different + missing + errored,
-            file_totali_db,
-            file_data.filepath
+            file_totali_db
         );
+        std::io::stdout().flush()?;
     }
 
-    println!("File mancanti({}):\n{:#?}", missing, missing_vec);
-    println!("File diversi({}):\n{:#?}", different, different_vec);
-    println!("File con errori({}):\n{:#?}", errored, errored_vec);
+    println!("\nFile mancanti({}):\n{:#?}", missing, missing_vec);
+    println!("\nFile diversi({}):\n{:#?}", different, different_vec);
+    println!("\nFile con errori({}):\n{:#?}", errored, errored_vec);
 
     return Ok(());
 }
